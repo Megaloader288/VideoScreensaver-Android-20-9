@@ -8,16 +8,33 @@ import android.content.res.Configuration;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.service.dreams.DreamService;
 import android.view.View;
 
 public class FullscreenDream extends DreamService {
 
     VideoScreensaverView mScreensaverView;
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
+    private boolean mAttached;
+    private boolean mDreaming;
+    private final Runnable mRebuildContent = new Runnable() {
+        @Override
+        public void run() {
+            // the dream may have stopped or lost its window during the rotation delay
+            if(!mAttached || !mDreaming || getWindow() == null) {
+                return;
+            }
+            initContentView();
+            mScreensaverView.start();
+            mScreensaverView.updateBattery(mBatLastPlugged, mBatLastLevel);
+        }
+    };
 
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
+        mAttached = true;
         setInteractive(false);
         setFullscreen(true);
         //setScreenBright(false); // doesn't seem to make a difference - or I don't understand it
@@ -44,17 +61,23 @@ public class FullscreenDream extends DreamService {
     @Override
     public void onDreamingStarted() {
         super.onDreamingStarted();
+        mDreaming = true;
         mScreensaverView.start();
     }
 
     @Override
     public void onDreamingStopped() {
+        mDreaming = false;
+        mHandler.removeCallbacks(mRebuildContent);
         super.onDreamingStopped();
         mScreensaverView.mMediaPlayer.stop();
     }
 
     @Override
     public void onDetachedFromWindow() {
+        mAttached = false;
+        mDreaming = false;
+        mHandler.removeCallbacks(mRebuildContent);
         super.onDetachedFromWindow();
 
         // unregister battery receiver
@@ -66,6 +89,10 @@ public class FullscreenDream extends DreamService {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        mHandler.removeCallbacks(mRebuildContent);
+        if(!mAttached || !mDreaming || getWindow() == null) {
+            return;
+        }
 
         // stop the current player before destroying the old view
         if(mScreensaverView != null) {
@@ -77,15 +104,7 @@ public class FullscreenDream extends DreamService {
         // re-init the content view
         // this is a really annoying Android bug: when rotating in screensaver mode,
         // the view is broken / not automatically updated to landscape
-        Handler handler = new Handler();
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                initContentView();
-                mScreensaverView.start();
-                mScreensaverView.updateBattery(mBatLastPlugged, mBatLastLevel);
-            }
-        }, 100);
+        mHandler.postDelayed(mRebuildContent, 100);
     }
 
     int mBatLastPlugged = 0;
