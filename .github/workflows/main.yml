@@ -1,0 +1,90 @@
+name: Build fullscreen APK
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply fullscreen fix (OPPO A92)
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+
+          d = pathlib.Path("app/src/main/java/systems/sieber/vscreensaver")
+
+          def rep(s, old, new):
+              assert s.count(old) == 1, "pattern not found exactly once: " + old[:70]
+              return s.replace(old, new)
+
+          # 1) VideoScreensaverView: fill the real screen, center-crop the video
+          p = d / "VideoScreensaverView.java"
+          s = p.read_text()
+          a = s.index("        DisplayMetrics displayMetrics = new DisplayMetrics();\n        ((Activity) getContext())")
+          b = s.index("        mVideoView.setLayoutParams(layoutParams);")
+          new_block = '''        // use the real size of the screen: the size of this view if it is already laid out,
+                  // otherwise the full display size including the area behind the navigation bar / cutout.
+                  // (Display.getMetrics() excludes the navigation bar, which leaves bars on phones like the OPPO A92;
+                  // also, in a DreamService the context is not an Activity)
+                  int screenWidth = getWidth();
+                  int screenHeight = getHeight();
+                  if(screenWidth <= 0 || screenHeight <= 0) {
+                      DisplayMetrics displayMetrics = new DisplayMetrics();
+                      WindowManager wm = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
+                      wm.getDefaultDisplay().getRealMetrics(displayMetrics);
+                      screenWidth = displayMetrics.widthPixels;
+                      screenHeight = displayMetrics.heightPixels;
+                  }
+                  int pivotPointX = 0;
+                  int pivotPointY = 0;
+                  float scaleY = 1.0f;
+                  float scaleX = 1.0f;
+                  ViewGroup.LayoutParams layoutParams = mVideoView.getLayoutParams();
+
+                  if(mSharedPref.getBoolean("video-stretch", true)) {
+                      // fill the whole screen without distortion: the surface covers the screen and the player
+                      // stretches the video to it, so we scale one axis back up to restore the video aspect ratio
+                      // (center crop, no bars, e.g. 16:9 video on a 20:9 display)
+                      float videoAspect = (float) videoWidth / videoHeight;
+                      float screenAspect = (float) screenWidth / screenHeight;
+                      if(screenAspect > videoAspect) {
+                          scaleY = (screenWidth / videoAspect) / screenHeight;
+                      } else {
+                          scaleX = (screenHeight * videoAspect) / screenWidth;
+                      }
+                      pivotPointX = screenWidth / 2;
+                      pivotPointY = screenHeight / 2;
+                      layoutParams.width = screenWidth;
+                      layoutParams.height = screenHeight;
+                  } else {
+                      float ratioWidth = (float) screenWidth / videoWidth;
+                      float ratioHeight = (float) screenHeight / videoHeight;
+                      float aspectRatio = (float) videoWidth / videoHeight;
+                      if(ratioWidth > ratioHeight) {
+                          layoutParams.width = (int) (screenHeight * aspectRatio);
+                          layoutParams.height = screenHeight;
+                      } else {
+                          layoutParams.width = screenWidth;
+                          layoutParams.height = (int) (screenWidth / aspectRatio);
+                      }
+                  }
+
+          '''
+          s = s[:a] + new_block + s[b:]
+          s = s.replace("import android.app.Activity;\n", "", 1)
+          p.write_text(s)
+
+          # 2) Settings screen: "Stretch Video" on by default
+          p = d / "BaseSettingsActivity.java"
+          s = p.read_text()
+          s = rep(s, 'mSharedPref.getBoolean("video-stretch", false)', 'mSharedPref.getBoolean("video-stretch", true)')
+          p.write_text(s)
+
+          # 3) Dream window: draw behind the nav bar and into the punch-hole area
+          p = d / "FullscreenDream.java"
+          s = p.read_text()
+          s = rep(s, "import android.view.View;\n", "import android.view.View;\nimport android.view.Window
