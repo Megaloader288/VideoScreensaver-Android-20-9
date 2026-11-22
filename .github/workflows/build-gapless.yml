@@ -1,0 +1,28 @@
+name: Build gapless APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply fixes
+        run: |
+          python3 apply_fix.py
+          python3 fix2.py
+          python3 fix3.py
+          python3 fix4.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+      - name: Build debug APK
+        run: ./gradlew assembleStandaloneDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: videoscreensaver-gapless-apk
+          path: app/build/outputs/apk/standalone/debug/*.apk
